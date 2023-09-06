@@ -4,5 +4,6 @@
         "dpdk_utils.h": "c",
         "random_spi_gw.h": "c",
         "doca_log.h": "c"
-    }
+    },
+    "C_Cpp.default.compileCommands": "build/compile_commands.json"
 }
