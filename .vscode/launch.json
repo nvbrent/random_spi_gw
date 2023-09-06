@@ -1,0 +1,18 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "gdb random-spi-gw",
+            "program": "${workspaceFolder}/applications/build/random_spi_gw/src/doca_random_spi_gw",
+            "request": "launch",
+            "type": "cppdbg",
+            "args": [
+                //"-sn", "enp23s0f0np0", "-un", "enp23s0f1np1", "-m", "tunnel", "-c", "ipsec_gw_rules_8192.json"
+            ],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "doca_flow.h": "c",
+        "dpdk_utils.h": "c",
+        "random_spi_gw.h": "c",
+        "doca_log.h": "c"
+    }
+}
