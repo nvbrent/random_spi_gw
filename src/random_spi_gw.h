@@ -34,7 +34,8 @@ struct eth_ipv6_tunnel_ipsec_hdr {
 };
 
 struct connection {
-	uint32_t ipsec_idx;
+	uint32_t encrypt_ipsec_idx;
+	uint32_t decrypt_ipsec_idx;
 	rte_be32_t spi;
 	struct doca_ipsec_sa *encrypt_sa;
 	struct doca_ipsec_sa *decrypt_sa;

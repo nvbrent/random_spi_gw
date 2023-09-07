@@ -12,6 +12,7 @@
  */
 #include <signal.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 
 #include <rte_ethdev.h>
 
@@ -85,6 +86,13 @@ uint32_t idx_to_spi(uint32_t n)
 	return n + 0x8000;
 }
 
+/* user context struct that will be used in entries process callback */
+struct entries_status {
+	bool failure;	      /* will be set to true if some entry status will not be success */
+	int nb_processed;     /* number of entries that was already processed */
+	int entries_in_queue; /* number of entries in queue that is waiting to process */
+};
+
 /*
  * Entry processing callback
  *
@@ -102,17 +110,16 @@ check_for_valid_entry(struct doca_flow_pipe_entry *entry, uint16_t pipe_queue,
 	(void)op;
 	(void)pipe_queue;
 
-	// TODO: track via user_ctx/entry_status
-	// struct entries_status *entry_status = (struct entries_status *)user_ctx;
+	struct entries_status *entry_status = (struct entries_status *)user_ctx;
 
-	// if (entry_status == NULL || op != DOCA_FLOW_ENTRY_OP_ADD)
-	// 	return;
-	// if (status != DOCA_FLOW_ENTRY_STATUS_SUCCESS) {
-	// 	//DOCA_LOG_WARN("%s: status = %d, wanted %d", __FUNCTION__, status, DOCA_FLOW_ENTRY_STATUS_SUCCESS);
-	// 	entry_status->failure = true; /* set failure to true if processing failed */
-	// }
-	// entry_status->nb_processed++;
-	// entry_status->entries_in_queue--;
+	if (entry_status == NULL || op != DOCA_FLOW_ENTRY_OP_ADD)
+		return;
+	if (status != DOCA_FLOW_ENTRY_STATUS_SUCCESS) {
+		//DOCA_LOG_WARN("%s: status = %d, wanted %d", __FUNCTION__, status, DOCA_FLOW_ENTRY_STATUS_SUCCESS);
+		entry_status->failure = true; /* set failure to true if processing failed */
+	}
+	entry_status->nb_processed++;
+	entry_status->entries_in_queue--;
 }
 
 /*
@@ -287,12 +294,14 @@ destroy_ipsec_sa(
 
 void create_encrypt_obj(
 	struct random_spi_gw_config *app_cfg,
-	uint32_t ipsec_idx,
+	uint32_t conn_idx,
 	uint16_t egress_port_id,
 	uint8_t *key_256)
 {
+	struct connection *conn = &app_cfg->connections[conn_idx];
+
 	// Submits an SA-create job to the HW and awaits the resulting object handle
-	app_cfg->connections[ipsec_idx].encrypt_sa = create_security_assoc(
+	conn->encrypt_sa = create_security_assoc(
 		app_cfg, key_256, DOCA_IPSEC_DIRECTION_EGRESS_ENCRYPT);
 
 	struct doca_flow_shared_resource_cfg cfg = {
@@ -306,7 +315,7 @@ void create_encrypt_obj(
 			.reformat_data_sz = sizeof(struct eth_ipv6_tunnel_ipsec_hdr),
 			// reformat_data[] below
 			.reformat_icv_sz = DOCA_FLOW_CRYPTO_ICV_DEFAULT,
-			.security_ctx = app_cfg->connections[ipsec_idx].encrypt_sa,
+			.security_ctx = conn->encrypt_sa,
 			.fwd = {
 				.type = DOCA_FLOW_FWD_PORT,
 				.port_id = egress_port_id,
@@ -316,17 +325,19 @@ void create_encrypt_obj(
 
 	assert(sizeof(struct eth_ipv6_tunnel_ipsec_hdr) <= DOCA_FLOW_CRYPTO_REFORMAT_LEN_MAX);
 	
-	*(struct eth_ipv6_tunnel_ipsec_hdr *)cfg.crypto_cfg.reformat_data = app_cfg->encap_hdr;
+	struct eth_ipv6_tunnel_ipsec_hdr *encap_hdr = (struct eth_ipv6_tunnel_ipsec_hdr *)cfg.crypto_cfg.reformat_data;
+	*encap_hdr = app_cfg->encap_hdr;
+	encap_hdr->esp.spi = conn->spi;
 
 	doca_error_t result = doca_flow_shared_resource_cfg(
-		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, ipsec_idx, &cfg);
+		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, conn->encrypt_ipsec_idx, &cfg);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to cfg shared ipsec object: %s", doca_get_error_string(result));
 		exit(-1);
 	}
 
 	result = doca_flow_shared_resources_bind(
-		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, &ipsec_idx, 1, app_cfg->pf.port);
+		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, &conn->encrypt_ipsec_idx, 1, app_cfg->pf.port);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to bind shared ipsec object to port: %s", doca_get_error_string(result));
 		exit(-1);
@@ -335,11 +346,13 @@ void create_encrypt_obj(
 
 void create_decrypt_obj(
 	struct random_spi_gw_config *app_cfg,
-	uint32_t ipsec_idx,
+	uint32_t conn_idx,
 	uint8_t *key_256)
 {
+	struct connection *conn = &app_cfg->connections[conn_idx];
+
 	// Submits an SA-create job to the HW and awaits the resulting object handle
-	app_cfg->connections[ipsec_idx].decrypt_sa = create_security_assoc(
+	conn->decrypt_sa = create_security_assoc(
 		app_cfg, key_256, DOCA_IPSEC_DIRECTION_INGRESS_DECRYPT);
 
 	struct doca_flow_shared_resource_cfg cfg = {
@@ -353,7 +366,7 @@ void create_decrypt_obj(
 			.reformat_data_sz = sizeof(struct rte_ether_hdr),
 			// reformat_data[] below
 			.reformat_icv_sz = DOCA_FLOW_CRYPTO_ICV_DEFAULT,
-			.security_ctx = app_cfg->connections[ipsec_idx].decrypt_sa,
+			.security_ctx = conn->decrypt_sa,
 			.fwd = {
 				.type = DOCA_FLOW_FWD_PIPE,
 				.next_pipe = app_cfg->syndrome_pipe,
@@ -366,14 +379,14 @@ void create_decrypt_obj(
 	*(struct rte_ether_hdr *)cfg.crypto_cfg.reformat_data = app_cfg->decap_eth_hdr;
 
 	doca_error_t result = doca_flow_shared_resource_cfg(
-		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, ipsec_idx, &cfg);
+		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, conn->decrypt_ipsec_idx, &cfg);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to cfg shared ipsec object: %s", doca_get_error_string(result));
 		exit(-1);
 	}
 
 	result = doca_flow_shared_resources_bind(
-		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, &ipsec_idx, 1, app_cfg->pf.port);
+		DOCA_FLOW_SHARED_RESOURCE_CRYPTO, &conn->decrypt_ipsec_idx, 1, app_cfg->pf.port);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to bind shared ipsec object to port: %s", doca_get_error_string(result));
 		exit(-1);
@@ -383,11 +396,17 @@ void create_decrypt_obj(
 struct doca_flow_pipe *
 create_empty_root_pipe(
 	struct doca_flow_port *port,
+	uint32_t ingress_port_id,
 	enum doca_flow_pipe_domain domain,
 	struct doca_flow_pipe *next_pipe)
 {
 	const char *pipe_name = "DUMMY_ROOT_PIPE";
-	struct doca_flow_match match = {};
+	struct doca_flow_match match = {
+		//.meta.port_meta = UINT32_MAX,
+	};
+	struct doca_flow_match match_mask = {
+		//.meta.port_meta = UINT32_MAX,
+	};
 	struct doca_flow_fwd fwd = {
 		.type = DOCA_FLOW_FWD_PIPE,
 		.next_pipe = next_pipe,
@@ -402,6 +421,7 @@ create_empty_root_pipe(
 		},
 		.port = port,
 		.match = &match,
+		.match_mask = &match_mask,
 	};
 	struct doca_flow_pipe *pipe = NULL;
 	doca_error_t result = doca_flow_pipe_create(&pipe_cfg, &fwd, NULL, &pipe);
@@ -410,9 +430,12 @@ create_empty_root_pipe(
 		exit(-1);
 	}
 
+	//match.meta.port_meta = ingress_port_id;
+
 	struct doca_flow_pipe_entry *entry = NULL;
+	struct entries_status status = {};
 	result = doca_flow_pipe_add_entry(0, pipe,
-		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, NULL, &entry);
+		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", pipe_name, doca_get_error_string(result));
 		exit(-1);
@@ -475,11 +498,13 @@ struct doca_flow_pipe *create_encrypt_pipe(
 	}
 
 	for (uint32_t i = 0; i < app_cfg->num_spi; i++) {
-		crypto_action.security.crypto_id = app_cfg->connections[i].ipsec_idx;
+		struct connection *conn = &app_cfg->connections[i];
+		crypto_action.security.crypto_id = conn->encrypt_ipsec_idx;
 		
 		struct doca_flow_pipe_entry *entry = NULL;
+		struct entries_status status = {};
 		result = doca_flow_pipe_hash_add_entry(0, pipe,
-			i, &crypto_action, &mon, NULL, DOCA_FLOW_NO_WAIT, NULL, &entry);
+			i, &crypto_action, &mon, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 		if (result != DOCA_SUCCESS) {
 			DOCA_LOG_ERR("Failed to create %s pipe entry %d: %s", 
 				pipe_name, i, doca_get_error_string(result));
@@ -557,12 +582,14 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	}
 
 	for (uint32_t i = 0; i < app_cfg->num_spi; i++) {
-		match.tun.esp_spi = app_cfg->connections[i].spi;
-		crypto_action.security.crypto_id = app_cfg->connections[i].ipsec_idx + app_cfg->num_spi;
+		struct connection *conn = &app_cfg->connections[i];
+		match.tun.esp_spi = conn->spi;
+		crypto_action.security.crypto_id = conn->decrypt_ipsec_idx;
 		
 		struct doca_flow_pipe_entry *entry = NULL;
+		struct entries_status status = {};
 		result = doca_flow_pipe_add_entry(0, pipe,
-			&match, &crypto_action, NULL, NULL, DOCA_FLOW_NO_WAIT, NULL, &entry);
+			&match, &crypto_action, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 		if (result != DOCA_SUCCESS) {
 			DOCA_LOG_ERR("Failed to create %s pipe entry %d: %s", 
 				pipe_name, i, doca_get_error_string(result));
@@ -581,13 +608,17 @@ struct doca_flow_pipe *create_decrypt_pipe(
 
 struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	const struct random_spi_gw_config *app_cfg,
-	uint32_t dest_port_id)
+	uint32_t ingress_port_id,
+	uint32_t egress_port_id)
 {
 	const char *pipe_name = "DECRYPT_SYNDROME_PIPE";
 
-	struct doca_flow_match match = {};
+	struct doca_flow_match match = {
+	//	.meta.port_meta = UINT32_MAX,
+	};
 	struct doca_flow_match match_mask = {
 		.meta = {
+	//		.port_meta = UINT32_MAX,
 			.ipsec_syndrome = UINT8_MAX, // decrypt-syndrome bits
 			.u32 = { UINT32_MAX, UINT32_MAX }, // anti-replay syndrome bits
 		},
@@ -599,7 +630,7 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 
 	struct doca_flow_fwd fwd = {
 		.type = DOCA_FLOW_FWD_PORT,
-		.port_id = dest_port_id,
+		.port_id = egress_port_id,
 	};
 	struct doca_flow_fwd miss = {
 		.type = DOCA_FLOW_FWD_DROP,
@@ -623,9 +654,12 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 		exit(-1);
 	}
 
+	//match.meta.port_meta = ingress_port_id;
+
 	struct doca_flow_pipe_entry *entry = NULL;
+	struct entries_status status = {};
 	result = doca_flow_pipe_add_entry(0, pipe,
-		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, NULL, &entry);
+		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
 			pipe_name, doca_get_error_string(result));
@@ -649,10 +683,14 @@ static void random_spi_gw_init_crypto_objs(
 	struct random_spi_gw_config *app_cfg)
 {
 	for (int i=0; i<app_cfg->num_spi; i++) {
+		app_cfg->connections[i].encrypt_ipsec_idx = i;
+		app_cfg->connections[i].decrypt_ipsec_idx = i + app_cfg->num_spi;
+		app_cfg->connections[i].spi = RTE_BE32(idx_to_spi(i));
+
 		uint8_t key_256[KEY_LEN_BYTES];
 		idx_to_key256(i, key_256);
 		create_encrypt_obj(app_cfg, i, 0, key_256);
-		create_decrypt_obj(app_cfg, i + app_cfg->num_spi, key_256);
+		create_decrypt_obj(app_cfg, i, key_256);
 	}
 }
 
@@ -660,7 +698,7 @@ static doca_error_t random_spi_gw_init_flows(
 	struct random_spi_gw_config *app_cfg)
 {
 	DOCA_LOG_INFO("Creating Syndrome Pipe");
-	app_cfg->syndrome_pipe = create_decrypt_syndrome_pipe(app_cfg, 1);
+	app_cfg->syndrome_pipe = create_decrypt_syndrome_pipe(app_cfg, 0, 1);
 
 	DOCA_LOG_INFO("Creating %d Crypto Objects", app_cfg->num_spi);
 	random_spi_gw_init_crypto_objs(app_cfg);
@@ -672,9 +710,9 @@ static doca_error_t random_spi_gw_init_flows(
 	app_cfg->encrypt_pipe = create_encrypt_pipe(app_cfg);
 
 	DOCA_LOG_INFO("Creating Root Pipes");
-	create_empty_root_pipe(app_cfg->pf.port, DOCA_FLOW_PIPE_DOMAIN_SECURE_INGRESS, app_cfg->decrypt_pipe);
-	create_empty_root_pipe(app_cfg->pf.port, DOCA_FLOW_PIPE_DOMAIN_SECURE_EGRESS, app_cfg->encrypt_pipe);
-	create_empty_root_pipe(app_cfg->pf.port, DOCA_FLOW_PIPE_DOMAIN_DEFAULT, app_cfg->syndrome_pipe);
+	create_empty_root_pipe(app_cfg->pf.port, 0, DOCA_FLOW_PIPE_DOMAIN_DEFAULT, app_cfg->syndrome_pipe);
+	create_empty_root_pipe(app_cfg->pf.port, 0, DOCA_FLOW_PIPE_DOMAIN_SECURE_INGRESS, app_cfg->decrypt_pipe);
+	create_empty_root_pipe(app_cfg->pf.port, 1, DOCA_FLOW_PIPE_DOMAIN_SECURE_EGRESS, app_cfg->encrypt_pipe);
 
 	return DOCA_SUCCESS;
 }
@@ -703,7 +741,7 @@ main(int argc, char **argv)
 	struct random_spi_gw_config app_cfg = {
 		.dpdk_config = &dpdk_config,
 		.nb_cores = DEFAULT_NB_CORES,
-		.num_spi = 128,
+		.num_spi = 16,
 		.pf = {
 			.dev_pci_dbdf = "17:00.0",
 		}
@@ -772,11 +810,19 @@ main(int argc, char **argv)
 		goto dpdk_destroy;
 	}
 
-	// Cannot query mac address until DPDK ports are probed
+	// Configure the encap headers:
 	rte_eth_macaddr_get(0, &app_cfg.encap_hdr.eth.src_addr);
-	// TODO: get dmac from argp
-	rte_ether_unformat_addr("b8:3f:d2:ba:65:ee", &app_cfg.encap_hdr.eth.dst_addr);
-	// TODO: encap IP addr, decap mac addr
+	rte_ether_unformat_addr("b8:3f:d2:ba:65:ee", &app_cfg.encap_hdr.eth.dst_addr); // TODO: argp for dcap addr
+	app_cfg.encap_hdr.eth.ether_type = RTE_BE16(RTE_ETHER_TYPE_IPV6);
+
+	inet_pton(AF_INET6, "11::10", &app_cfg.encap_hdr.ip.src_addr); // INET6_ADDRSTRLEN
+	inet_pton(AF_INET6, "22::10", &app_cfg.encap_hdr.ip.dst_addr);
+	app_cfg.encap_hdr.ip.proto = IPPROTO_ESP;
+	app_cfg.encap_hdr.ip.hop_limits = 0x40;
+
+	// Configure the decap headers:
+	rte_eth_macaddr_get(1, &app_cfg.decap_eth_hdr.src_addr);
+	rte_ether_unformat_addr("22:d6:04:82:05:ac", &app_cfg.decap_eth_hdr.dst_addr);
 
 	result = random_spi_gw_ipsec_ctx_create(&app_cfg);
 	if (result != DOCA_SUCCESS) {
