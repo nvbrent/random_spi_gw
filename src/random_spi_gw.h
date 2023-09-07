@@ -31,7 +31,7 @@ struct eth_ipv6_tunnel_ipsec_hdr {
 	// IPsec initialization vector, 8/16 bytes.
 	// populated by HW offload.
 	uint8_t iv[16];
-};
+} __rte_packed __rte_aligned(2);
 
 struct connection {
 	uint32_t encrypt_ipsec_idx;
