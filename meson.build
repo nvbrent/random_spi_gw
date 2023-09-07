@@ -38,6 +38,7 @@ app_inc_dirs = [include_directories(doca_home, common_dir_path, 'src')]
 app_srcs = [
 	'src/random_spi_gw.c',
 	'src/random_spi_gw_dev.c',
+	'src/random_spi_gw_program_args.c',
 	# DOCA-provided utilities:
 	common_dir_path + '/dpdk_utils.c',
 	common_dir_path + '/offload_rules.c',

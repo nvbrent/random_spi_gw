@@ -667,12 +667,6 @@ create_root_ctrl_pipe(
 	return pipe;
 }
 
-doca_error_t register_argp_params()
-{
-	// TODO: argp for dmac, num_spi, etc.
-	return DOCA_SUCCESS;
-}
-
 static void random_spi_gw_init_crypto_objs(
 	struct random_spi_gw_config *app_cfg)
 {
@@ -761,7 +755,7 @@ main(int argc, char **argv)
 		DOCA_LOG_ERR("Failed to init ARGP resources: %s", doca_get_error_string(result));
 		return EXIT_FAILURE;
 	}
-	result = register_argp_params();
+	result = random_spi_gw_register_argp_params();
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to register application params: %s", doca_get_error_string(result));
 		doca_argp_destroy();
@@ -808,7 +802,6 @@ main(int argc, char **argv)
 
 	// Configure the encap headers:
 	rte_eth_macaddr_get(0, &app_cfg.encap_hdr.eth.src_addr);
-	rte_ether_unformat_addr("b8:3f:d2:ba:65:ee", &app_cfg.encap_hdr.eth.dst_addr); // TODO: argp for dcap addr
 	app_cfg.encap_hdr.eth.ether_type = RTE_BE16(RTE_ETHER_TYPE_IPV6);
 
 	inet_pton(AF_INET6, "11::10", &app_cfg.encap_hdr.ip.src_addr); // INET6_ADDRSTRLEN

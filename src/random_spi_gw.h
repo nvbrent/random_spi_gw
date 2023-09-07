@@ -78,6 +78,8 @@ struct random_spi_gw_config {
 	struct connection *connections;
 };
 
+doca_error_t random_spi_gw_register_argp_params(void);
+
 doca_error_t random_spi_gw_ipsec_ctx_create(struct random_spi_gw_config *app_cfg);
 
 doca_error_t random_spi_gw_ipsec_ctx_destroy(const struct random_spi_gw_config *app_cfg);
