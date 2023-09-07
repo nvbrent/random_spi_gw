@@ -54,10 +54,15 @@ struct random_spi_gw_config {
 
 	// Probe a single PF with some number of VF representors
 	struct PF {
+		uint32_t port_id;
 		char dev_pci_dbdf[DOCA_DEVINFO_PCI_ADDR_SIZE];
 		struct doca_dev *dev;
 		struct doca_flow_port *port;
 	} pf;
+
+	struct VF {
+		uint32_t port_id;
+	} vf;
 
 	uint32_t salt;
 

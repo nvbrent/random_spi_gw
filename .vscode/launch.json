@@ -6,7 +6,7 @@
     "configurations": [
         {
             "name": "gdb random-spi-gw",
-            "program": "${workspaceFolder}/applications/build/random_spi_gw/src/doca_random_spi_gw",
+            "program": "${workspaceFolder}/build/random-spi-gw",
             "request": "launch",
             "type": "cppdbg",
             "args": [

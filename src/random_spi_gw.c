@@ -59,6 +59,10 @@ DOCA_LOG_REGISTER(RANDOM_SPI_GW);
 
 static bool force_quit;			/* Set when signal is received */
 
+static struct doca_flow_monitor monitor_with_count = {
+	.flags = DOCA_FLOW_MONITOR_COUNT,
+};
+
 /*
  * Signals handler function to handle SIGINT and SIGTERM signals
  *
@@ -295,7 +299,6 @@ destroy_ipsec_sa(
 void create_encrypt_obj(
 	struct random_spi_gw_config *app_cfg,
 	uint32_t conn_idx,
-	uint16_t egress_port_id,
 	uint8_t *key_256)
 {
 	struct connection *conn = &app_cfg->connections[conn_idx];
@@ -318,7 +321,7 @@ void create_encrypt_obj(
 			.security_ctx = conn->encrypt_sa,
 			.fwd = {
 				.type = DOCA_FLOW_FWD_PORT,
-				.port_id = egress_port_id,
+				.port_id = app_cfg->pf.port_id,
 			},
 		},
 	};
@@ -393,62 +396,6 @@ void create_decrypt_obj(
 	}
 }
 
-struct doca_flow_pipe *
-create_empty_root_pipe(
-	struct doca_flow_port *port,
-	uint32_t ingress_port_id,
-	enum doca_flow_pipe_domain domain,
-	struct doca_flow_pipe *next_pipe)
-{
-	const char *pipe_name = "DUMMY_ROOT_PIPE";
-	struct doca_flow_match match = {
-		//.meta.port_meta = UINT32_MAX,
-	};
-	struct doca_flow_match match_mask = {
-		//.meta.port_meta = UINT32_MAX,
-	};
-	struct doca_flow_fwd fwd = {
-		.type = DOCA_FLOW_FWD_PIPE,
-		.next_pipe = next_pipe,
-	};
-	struct doca_flow_pipe_cfg pipe_cfg = {
-		.attr = {
-			.name = pipe_name,
-			.domain = domain,
-			.is_root = true,
-			.nb_flows = 1,
-			.type = DOCA_FLOW_PIPE_BASIC,
-		},
-		.port = port,
-		.match = &match,
-		.match_mask = &match_mask,
-	};
-	struct doca_flow_pipe *pipe = NULL;
-	doca_error_t result = doca_flow_pipe_create(&pipe_cfg, &fwd, NULL, &pipe);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_get_error_string(result));
-		exit(-1);
-	}
-
-	//match.meta.port_meta = ingress_port_id;
-
-	struct doca_flow_pipe_entry *entry = NULL;
-	struct entries_status status = {};
-	result = doca_flow_pipe_add_entry(0, pipe,
-		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", pipe_name, doca_get_error_string(result));
-		exit(-1);
-	}
-
-	result = doca_flow_entries_process(port, 0, TIMEOUT_USEC, 1);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
-		exit(-1);
-	}
-	return pipe;
-}
-
 struct doca_flow_pipe *create_encrypt_pipe(
 	const struct random_spi_gw_config *app_cfg)
 {
@@ -456,10 +403,6 @@ struct doca_flow_pipe *create_encrypt_pipe(
 
 	struct doca_flow_match match_mask = {
 		.meta.random = UINT16_MAX,
-	};
-
-	struct doca_flow_monitor mon = {
-		.flags = DOCA_FLOW_MONITOR_COUNT,
 	};
 
 	struct doca_flow_actions crypto_action = {
@@ -485,7 +428,7 @@ struct doca_flow_pipe *create_encrypt_pipe(
 		},
 		.port = app_cfg->pf.port,
 		.match_mask = &match_mask,
-		.monitor = &mon,
+		.monitor = &monitor_with_count,
 		.actions = actions,
 		.actions_masks = actions,
 	};
@@ -504,7 +447,7 @@ struct doca_flow_pipe *create_encrypt_pipe(
 		struct doca_flow_pipe_entry *entry = NULL;
 		struct entries_status status = {};
 		result = doca_flow_pipe_hash_add_entry(0, pipe,
-			i, &crypto_action, &mon, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
+			i, &crypto_action, &monitor_with_count, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 		if (result != DOCA_SUCCESS) {
 			DOCA_LOG_ERR("Failed to create %s pipe entry %d: %s", 
 				pipe_name, i, doca_get_error_string(result));
@@ -534,17 +477,10 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	const char *pipe_name = "DECRYPT_PIPE";
 
 	struct doca_flow_match match = {
-		.outer = {
-//			.l3_type = DOCA_FLOW_L3_TYPE_IP6,
-		},
 		.tun = {
 			.type = DOCA_FLOW_TUN_ESP,
 			.esp_spi = UINT32_MAX,
 		},
-	};
-
-	struct doca_flow_monitor mon = {
-		.flags = DOCA_FLOW_MONITOR_COUNT,
 	};
 
 	struct doca_flow_actions crypto_action = {
@@ -569,7 +505,7 @@ struct doca_flow_pipe *create_decrypt_pipe(
 		},
 		.port = app_cfg->pf.port,
 		.match = &match,
-		.monitor = &mon,
+		.monitor = &monitor_with_count,
 		.actions = actions,
 		.actions_masks = actions,
 	};
@@ -608,24 +544,17 @@ struct doca_flow_pipe *create_decrypt_pipe(
 
 struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	const struct random_spi_gw_config *app_cfg,
-	uint32_t ingress_port_id,
 	uint32_t egress_port_id)
 {
 	const char *pipe_name = "DECRYPT_SYNDROME_PIPE";
 
 	struct doca_flow_match match = {
-	//	.meta.port_meta = UINT32_MAX,
 	};
 	struct doca_flow_match match_mask = {
 		.meta = {
-	//		.port_meta = UINT32_MAX,
 			.ipsec_syndrome = UINT8_MAX, // decrypt-syndrome bits
 			.u32 = { UINT32_MAX, UINT32_MAX }, // anti-replay syndrome bits
 		},
-	};
-
-	struct doca_flow_monitor mon = {
-		.flags = DOCA_FLOW_MONITOR_COUNT,
 	};
 
 	struct doca_flow_fwd fwd = {
@@ -644,7 +573,7 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 		.port = app_cfg->pf.port,
 		.match = &match,
 		.match_mask = &match_mask,
-		.monitor = &mon,
+		.monitor = &monitor_with_count,
 	};
 
 	struct doca_flow_pipe *pipe = NULL;
@@ -653,8 +582,6 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_get_error_string(result));
 		exit(-1);
 	}
-
-	//match.meta.port_meta = ingress_port_id;
 
 	struct doca_flow_pipe_entry *entry = NULL;
 	struct entries_status status = {};
@@ -669,6 +596,73 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
 		exit(-1);
+	}
+	return pipe;
+}
+
+struct doca_flow_pipe *
+create_root_ctrl_pipe(
+	const struct random_spi_gw_config *app_cfg)
+{
+	const char *pipe_name = "ROOT_CTRL_PIPE";
+
+	struct doca_flow_pipe_cfg pipe_cfg = {
+		.attr = {
+			.name = pipe_name,
+			.is_root = true,
+			.type = DOCA_FLOW_PIPE_CONTROL,
+		},
+		.port = app_cfg->pf.port,
+	};
+
+	struct doca_flow_pipe *pipe = NULL;
+	doca_error_t result = doca_flow_pipe_create(&pipe_cfg, NULL, NULL, &pipe);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_get_error_string(result));
+		exit(-1);
+	}
+
+	struct doca_flow_match uplink_match = {
+		.meta = {
+			.port_meta = 0,
+		},
+	};
+	struct doca_flow_match match_mask_port_meta = {
+		.meta = {
+			.port_meta = UINT32_MAX,
+		},
+	};
+	struct doca_flow_fwd uplink_fwd = {
+		.type = DOCA_FLOW_FWD_PIPE,
+		.next_pipe = app_cfg->decrypt_pipe,
+	};
+	uint32_t uplink_rule_prio = 3;
+
+	struct doca_flow_pipe_entry *entry = NULL;
+	struct entries_status status = {};
+	result = doca_flow_pipe_control_add_entry(0, uplink_rule_prio, pipe,
+		&uplink_match, &match_mask_port_meta, NULL, NULL, NULL, NULL, &uplink_fwd, &status, &entry);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
+			pipe_name, doca_get_error_string(result));
+	}
+
+	struct doca_flow_match vf_match = {
+		.meta = {
+			.port_meta = 1,
+		},
+	};
+	struct doca_flow_fwd vf_fwd = {
+		.type = DOCA_FLOW_FWD_PIPE,
+		.next_pipe = app_cfg->encrypt_pipe,
+	};
+	uint32_t vf_rule_prio = 2;
+
+	result = doca_flow_pipe_control_add_entry(0, vf_rule_prio, pipe,
+		&vf_match, &match_mask_port_meta, NULL, NULL, NULL, NULL, &vf_fwd, &status, &entry);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
+			pipe_name, doca_get_error_string(result));
 	}
 	return pipe;
 }
@@ -689,7 +683,7 @@ static void random_spi_gw_init_crypto_objs(
 
 		uint8_t key_256[KEY_LEN_BYTES];
 		idx_to_key256(i, key_256);
-		create_encrypt_obj(app_cfg, i, 0, key_256);
+		create_encrypt_obj(app_cfg, i, key_256);
 		create_decrypt_obj(app_cfg, i, key_256);
 	}
 }
@@ -698,21 +692,19 @@ static doca_error_t random_spi_gw_init_flows(
 	struct random_spi_gw_config *app_cfg)
 {
 	DOCA_LOG_INFO("Creating Syndrome Pipe");
-	app_cfg->syndrome_pipe = create_decrypt_syndrome_pipe(app_cfg, 0, 1);
+	app_cfg->syndrome_pipe = create_decrypt_syndrome_pipe(app_cfg, 1);
 
 	DOCA_LOG_INFO("Creating %d Crypto Objects", app_cfg->num_spi);
 	random_spi_gw_init_crypto_objs(app_cfg);
 
-	DOCA_LOG_INFO("Creating Decrypt Pipe");
-	app_cfg->decrypt_pipe = create_decrypt_pipe(app_cfg);
-
 	DOCA_LOG_INFO("Creating Encrypt Pipe");
 	app_cfg->encrypt_pipe = create_encrypt_pipe(app_cfg);
 
+	DOCA_LOG_INFO("Creating Decrypt Pipe");
+	app_cfg->decrypt_pipe = create_decrypt_pipe(app_cfg);
+
 	DOCA_LOG_INFO("Creating Root Pipes");
-	create_empty_root_pipe(app_cfg->pf.port, 0, DOCA_FLOW_PIPE_DOMAIN_DEFAULT, app_cfg->syndrome_pipe);
-	create_empty_root_pipe(app_cfg->pf.port, 0, DOCA_FLOW_PIPE_DOMAIN_SECURE_INGRESS, app_cfg->decrypt_pipe);
-	create_empty_root_pipe(app_cfg->pf.port, 1, DOCA_FLOW_PIPE_DOMAIN_SECURE_EGRESS, app_cfg->encrypt_pipe);
+	create_root_ctrl_pipe(app_cfg);
 
 	return DOCA_SUCCESS;
 }
@@ -741,10 +733,14 @@ main(int argc, char **argv)
 	struct random_spi_gw_config app_cfg = {
 		.dpdk_config = &dpdk_config,
 		.nb_cores = DEFAULT_NB_CORES,
-		.num_spi = 16,
+		.num_spi = 8,
 		.pf = {
+			.port_id = 0,
 			.dev_pci_dbdf = "17:00.0",
-		}
+		},
+		.vf = {
+			.port_id = 1,
+		},
 	};
 
 	char cores_str[10];
@@ -817,6 +813,7 @@ main(int argc, char **argv)
 
 	inet_pton(AF_INET6, "11::10", &app_cfg.encap_hdr.ip.src_addr); // INET6_ADDRSTRLEN
 	inet_pton(AF_INET6, "22::10", &app_cfg.encap_hdr.ip.dst_addr);
+	app_cfg.encap_hdr.ip.vtc_flow = RTE_BE32(6 << 28);
 	app_cfg.encap_hdr.ip.proto = IPPROTO_ESP;
 	app_cfg.encap_hdr.ip.hop_limits = 0x40;
 
