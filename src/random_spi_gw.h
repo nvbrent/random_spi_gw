@@ -24,13 +24,9 @@ struct eth_ipv6_tunnel_ipsec_hdr {
 	// omits sn/iv; include them below.
 	struct rte_esp_hdr esp;
 
-	// IPsec anti-replay sequence number.
+	// IPsec initialization vector, 8 bytes.
 	// populated by HW offload.
-	rte_be32_t sn;
-
-	// IPsec initialization vector, 8/16 bytes.
-	// populated by HW offload.
-	uint8_t iv[16];
+	uint8_t iv[8];
 } __rte_packed __rte_aligned(2);
 
 struct connection {

@@ -216,7 +216,7 @@ create_security_assoc(
 				},
 			},
 			.icv_length = DOCA_IPSEC_ICV_LENGTH_16,
-			.sn_attr.sn_initial = 0,
+			.sn_attr.sn_initial = 1,
 			.direction = dir,
 		},
 	};
