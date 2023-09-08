@@ -372,7 +372,7 @@ void create_decrypt_obj(
 			.security_ctx = conn->decrypt_sa,
 			.fwd = {
 				.type = DOCA_FLOW_FWD_PIPE,
-				.next_pipe = app_cfg->syndrome_pipe,
+				.next_pipe = app_cfg->syndrome_check_pipe,
 			},
 		},
 	};
@@ -541,6 +541,51 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	return pipe;
 }
 
+struct doca_flow_pipe *create_syndrome_drop_pipe(
+	const struct random_spi_gw_config *app_cfg)
+{
+	const char *pipe_name = "BAD_SYNDROME_DROP_PIPE";
+
+	struct doca_flow_match match = {
+	};
+
+	struct doca_flow_fwd fwd = {
+		.type = DOCA_FLOW_FWD_DROP,
+	};
+
+	struct doca_flow_pipe_cfg cfg = {
+		.attr = {
+			.name = pipe_name,
+			.type = DOCA_FLOW_PIPE_BASIC,
+		},
+		.port = app_cfg->pf.port,
+		.match = &match,
+		.monitor = &monitor_with_count,
+	};
+
+	struct doca_flow_pipe *pipe = NULL;
+	doca_error_t result = doca_flow_pipe_create(&cfg, &fwd, NULL, &pipe);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_get_error_string(result));
+		exit(-1);
+	}
+
+	struct doca_flow_pipe_entry *entry = NULL;
+	struct entries_status status = {};
+	result = doca_flow_pipe_add_entry(0, pipe,
+		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
+			pipe_name, doca_get_error_string(result));
+	}
+
+	result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, 1);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
+		exit(-1);
+	}
+	return pipe;
+}
 
 struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	const struct random_spi_gw_config *app_cfg,
@@ -562,7 +607,8 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 		.port_id = egress_port_id,
 	};
 	struct doca_flow_fwd miss = {
-		.type = DOCA_FLOW_FWD_DROP,
+		.type = DOCA_FLOW_FWD_PIPE,
+		.next_pipe = app_cfg->bad_syndrome_drop_pipe,
 	};
 
 	struct doca_flow_pipe_cfg cfg = {
@@ -685,8 +731,10 @@ static void random_spi_gw_init_crypto_objs(
 static doca_error_t random_spi_gw_init_flows(
 	struct random_spi_gw_config *app_cfg)
 {
+	app_cfg->bad_syndrome_drop_pipe = create_syndrome_drop_pipe(app_cfg);
+
 	DOCA_LOG_INFO("Creating Syndrome Pipe");
-	app_cfg->syndrome_pipe = create_decrypt_syndrome_pipe(app_cfg, 1);
+	app_cfg->syndrome_check_pipe = create_decrypt_syndrome_pipe(app_cfg, 1);
 
 	DOCA_LOG_INFO("Creating %d Crypto Objects", app_cfg->num_spi);
 	random_spi_gw_init_crypto_objs(app_cfg);
