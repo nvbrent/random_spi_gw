@@ -160,10 +160,10 @@ random_spi_gw_init_doca_flow(
 		.queue_depth = QUEUE_DEPTH,
 		.cb = check_for_valid_entry,
 		.resource = {
-			.nb_counters = app_cfg->num_spi * 2,
+			.nb_counters = app_cfg->num_spi * 2 + 100,
 		},
 		.nr_shared_resources = {
-			[DOCA_FLOW_SHARED_RESOURCE_CRYPTO] = app_cfg->num_spi * 2,
+			[DOCA_FLOW_SHARED_RESOURCE_CRYPTO] = app_cfg->num_spi * 2 + 1,
 		},
 	};
 	doca_error_t result = doca_flow_init(&flow_cfg);
@@ -717,8 +717,8 @@ static void random_spi_gw_init_crypto_objs(
 	struct random_spi_gw_config *app_cfg)
 {
 	for (int i=0; i<app_cfg->num_spi; i++) {
-		app_cfg->connections[i].encrypt_ipsec_idx = i;
-		app_cfg->connections[i].decrypt_ipsec_idx = i + app_cfg->num_spi;
+		app_cfg->connections[i].encrypt_ipsec_idx = i + 1;
+		app_cfg->connections[i].decrypt_ipsec_idx = i + 1 + app_cfg->num_spi;
 		app_cfg->connections[i].spi = RTE_BE32(idx_to_spi(i));
 
 		uint8_t key_256[KEY_LEN_BYTES];
