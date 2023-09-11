@@ -860,7 +860,6 @@ main(int argc, char **argv)
 
 	// Configure the decap headers:
 	rte_eth_macaddr_get(1, &app_cfg.decap_eth_hdr.src_addr);
-	rte_ether_unformat_addr("22:d6:04:82:05:ac", &app_cfg.decap_eth_hdr.dst_addr);
 	app_cfg.decap_eth_hdr.ether_type = RTE_BE16(RTE_ETHER_TYPE_IPV6);
 
 	result = random_spi_gw_ipsec_ctx_create(&app_cfg);
