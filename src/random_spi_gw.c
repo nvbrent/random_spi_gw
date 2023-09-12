@@ -588,7 +588,7 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	struct doca_flow_match match_mask = {
 		.meta = {
 			.ipsec_syndrome = UINT8_MAX, // decrypt-syndrome bits
-			.u32 = { UINT32_MAX, UINT32_MAX }, // anti-replay syndrome bits
+			//.u32 = { UINT32_MAX, UINT32_MAX }, // anti-replay syndrome bits
 		},
 	};
 
