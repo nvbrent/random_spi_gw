@@ -35,8 +35,6 @@ struct connection {
 	rte_be32_t spi;
 	struct doca_ipsec_sa *encrypt_sa;
 	struct doca_ipsec_sa *decrypt_sa;
-	struct doca_flow_pipe_entry *encrypt_pipe_entry;
-	struct doca_flow_pipe_entry *decrypt_pipe_entry;
 };
 
 struct random_spi_gw_config {

@@ -32,14 +32,17 @@
 // For Uplink-to-VF traffic, simply match on SPI, decrypt and forward
 // to the VF.
 //
-//       --Empty root pipe--      --Hash pipe? Basic pipe?--
-//       [match:  null]           [match: pkt.rand_meta]
-// VF -> [action: null]        -> [action: encrypt w/ SPI] -> PF
-//       [dest: encrypt pipe]     [dest: uplink port]
+//            ROOT_PIPE
+// Ingress -> port_meta -> [0 -> DECRYPT_PIPE]
+//                         [1 -> ENCRYPT_PIPE]
 //
-//       [match: SPI]
-// PF -> [action: decrypt] -> VF
-//       [dest: VF port]
+//    DECRYPT_PIPE        DECRYPT_SYNDOME_PIPE
+// -> match SPI       ->  match syndrome bits   -> [0    -> Egress VF]
+//    action: decrypt                              [else -> DECRYPT_SYNDOME_DROP_PIPE + drop]
+//
+//    ENCRYPT_PIPE
+// -> match rand       ->  Egress PF
+//    action: encrypt
 //
 
 DOCA_LOG_REGISTER(RANDOM_SPI_GW);
@@ -155,6 +158,7 @@ random_spi_gw_init_doca_flow(
 {
 	/* init doca flow with crypto shared resources */
 	struct doca_flow_cfg flow_cfg = {
+        //.flags = DOCA_FLOW_CFG_PIPE_MISS_MON,
 		.queues = nb_queues,
 		.mode_args = "switch,hws,isolated",
 		.queue_depth = QUEUE_DEPTH,
@@ -298,15 +302,8 @@ destroy_ipsec_sa(
 
 void create_encrypt_obj(
 	struct random_spi_gw_config *app_cfg,
-	uint32_t conn_idx,
-	uint8_t *key_256)
+	struct connection *conn)
 {
-	struct connection *conn = &app_cfg->connections[conn_idx];
-
-	// Submits an SA-create job to the HW and awaits the resulting object handle
-	conn->encrypt_sa = create_security_assoc(
-		app_cfg, key_256, DOCA_IPSEC_DIRECTION_EGRESS_ENCRYPT);
-
 	struct doca_flow_shared_resource_cfg cfg = {
 		.domain = DOCA_FLOW_PIPE_DOMAIN_SECURE_EGRESS,
 		.crypto_cfg = {
@@ -349,15 +346,8 @@ void create_encrypt_obj(
 
 void create_decrypt_obj(
 	struct random_spi_gw_config *app_cfg,
-	uint32_t conn_idx,
-	uint8_t *key_256)
+	struct connection *conn)
 {
-	struct connection *conn = &app_cfg->connections[conn_idx];
-
-	// Submits an SA-create job to the HW and awaits the resulting object handle
-	conn->decrypt_sa = create_security_assoc(
-		app_cfg, key_256, DOCA_IPSEC_DIRECTION_INGRESS_DECRYPT);
-
 	struct doca_flow_shared_resource_cfg cfg = {
 		.domain = DOCA_FLOW_PIPE_DOMAIN_SECURE_INGRESS,
 		.crypto_cfg = {
@@ -716,15 +706,28 @@ create_root_ctrl_pipe(
 static void random_spi_gw_init_crypto_objs(
 	struct random_spi_gw_config *app_cfg)
 {
+	printf("salt: 0x%x\n", app_cfg->salt);
+
 	for (int i=0; i<app_cfg->num_spi; i++) {
-		app_cfg->connections[i].encrypt_ipsec_idx = i + 1;
-		app_cfg->connections[i].decrypt_ipsec_idx = i + 1 + app_cfg->num_spi;
-		app_cfg->connections[i].spi = RTE_BE32(idx_to_spi(i));
+		struct connection *conn = &app_cfg->connections[i];
+		conn->encrypt_ipsec_idx = i + 1;
+		conn->decrypt_ipsec_idx = i + 1 + app_cfg->num_spi;
+		conn->spi = RTE_BE32(idx_to_spi(i));
 
 		uint8_t key_256[KEY_LEN_BYTES];
-		idx_to_key256(i, key_256);
-		create_encrypt_obj(app_cfg, i, key_256);
-		create_decrypt_obj(app_cfg, i, key_256);
+		idx_to_key256(i + 1, key_256);
+
+		printf("Key %d: ", i);
+		for (int i=0; i<KEY_LEN_BYTES; i++)
+			printf("%02x:", key_256[i]);
+		printf("\n");
+
+		conn->encrypt_sa = create_security_assoc(app_cfg, key_256, DOCA_IPSEC_DIRECTION_EGRESS_ENCRYPT);
+		conn->decrypt_sa = create_security_assoc(app_cfg, key_256, DOCA_IPSEC_DIRECTION_INGRESS_DECRYPT);
+
+		// Bind the SAs to DOCA shared-resource IDs
+		create_encrypt_obj(app_cfg, conn);
+		create_decrypt_obj(app_cfg, conn);
 	}
 }
 
