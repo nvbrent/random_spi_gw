@@ -658,16 +658,23 @@ create_root_ctrl_pipe(
 		exit(-1);
 	}
 
-	struct doca_flow_match uplink_match = {
-		.meta = {
-			.port_meta = 0,
-		},
-	};
 	struct doca_flow_match match_mask_port_meta = {
 		.meta = {
 			.port_meta = UINT32_MAX,
 		},
 	};
+	struct doca_flow_match uplink_match = {
+		.meta = {
+			.port_meta = 0,
+		},
+	};
+	struct doca_flow_match vf_match = {
+		.meta = {
+			.port_meta = 1,
+		},
+	};
+
+	// Forward from uplink to the decryption pipe
 	struct doca_flow_fwd uplink_fwd = {
 		.type = DOCA_FLOW_FWD_PIPE,
 		.next_pipe = app_cfg->decrypt_pipe,
@@ -683,11 +690,7 @@ create_root_ctrl_pipe(
 			pipe_name, doca_get_error_string(result));
 	}
 
-	struct doca_flow_match vf_match = {
-		.meta = {
-			.port_meta = 1,
-		},
-	};
+	// Forward from the VF to the encryption pipe
 	struct doca_flow_fwd vf_fwd = {
 		.type = DOCA_FLOW_FWD_PIPE,
 		.next_pipe = app_cfg->encrypt_pipe,
@@ -700,14 +703,13 @@ create_root_ctrl_pipe(
 		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
 			pipe_name, doca_get_error_string(result));
 	}
+
 	return pipe;
 }
 
 static void random_spi_gw_init_crypto_objs(
 	struct random_spi_gw_config *app_cfg)
 {
-	printf("salt: 0x%x\n", app_cfg->salt);
-
 	for (int i=0; i<app_cfg->num_spi; i++) {
 		struct connection *conn = &app_cfg->connections[i];
 		conn->encrypt_ipsec_idx = i + 1;
@@ -716,11 +718,6 @@ static void random_spi_gw_init_crypto_objs(
 
 		uint8_t key_256[KEY_LEN_BYTES];
 		idx_to_key256(i + 1, key_256);
-
-		printf("Key %d: ", i);
-		for (int i=0; i<KEY_LEN_BYTES; i++)
-			printf("%02x:", key_256[i]);
-		printf("\n");
 
 		conn->encrypt_sa = create_security_assoc(app_cfg, key_256, DOCA_IPSEC_DIRECTION_EGRESS_ENCRYPT);
 		conn->decrypt_sa = create_security_assoc(app_cfg, key_256, DOCA_IPSEC_DIRECTION_INGRESS_DECRYPT);
@@ -886,7 +883,7 @@ main(int argc, char **argv)
 		goto doca_flow_cleanup;
 	}
 
-	DOCA_LOG_INFO("Initialization complete; hit CTRL-C to quit.");
+	DOCA_LOG_INFO("Initialization complete with %d SPIs; hit CTRL-C to quit.", app_cfg.num_spi);
 	while (!force_quit) {
 		sleep(1);
 	}
