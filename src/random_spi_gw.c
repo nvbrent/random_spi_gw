@@ -164,7 +164,7 @@ random_spi_gw_init_doca_flow(
 		.queue_depth = QUEUE_DEPTH,
 		.cb = check_for_valid_entry,
 		.resource = {
-			.nb_counters = app_cfg->num_spi * 2 + 100,
+			.nb_counters = app_cfg->num_spi * 3 + 100,
 		},
 		.nr_shared_resources = {
 			[DOCA_FLOW_SHARED_RESOURCE_CRYPTO] = app_cfg->num_spi * 2 + 1,
@@ -387,12 +387,22 @@ void create_decrypt_obj(
 }
 
 struct doca_flow_pipe *create_encrypt_pipe(
-	const struct random_spi_gw_config *app_cfg)
+	const struct random_spi_gw_config *app_cfg,
+	bool is_udp)
 {
-	const char *pipe_name = "ENCRYPT_PIPE";
+	const char *pipe_name = is_udp ? "UDP_ENCRYPT_PIPE" : "ENCRYPT_PIPE";
+	struct entries_status status = {};
 
-	struct doca_flow_match match_mask = {
+	struct doca_flow_match match_mask_general = {
 		.meta.random = UINT16_MAX,
+	};
+
+	struct doca_flow_match match_mask_udp = {
+		.outer = {
+			.l3_type = DOCA_FLOW_L3_TYPE_IP4,
+			.l4_type_ext = DOCA_FLOW_L4_TYPE_EXT_UDP,
+			.udp.l4_port.src_port = UINT16_MAX,
+		},
 	};
 
 	struct doca_flow_actions crypto_action = {
@@ -417,7 +427,7 @@ struct doca_flow_pipe *create_encrypt_pipe(
 			.domain = DOCA_FLOW_PIPE_DOMAIN_SECURE_EGRESS,
 		},
 		.port = app_cfg->pf.port,
-		.match_mask = &match_mask,
+		.match_mask = is_udp ? &match_mask_udp : &match_mask_general,
 		.monitor = &monitor_with_count,
 		.actions = actions,
 		.actions_masks = actions,
@@ -434,8 +444,8 @@ struct doca_flow_pipe *create_encrypt_pipe(
 		struct connection *conn = &app_cfg->connections[i];
 		crypto_action.security.crypto_id = conn->encrypt_ipsec_idx;
 		
+		++status.entries_in_queue;
 		struct doca_flow_pipe_entry *entry = NULL;
-		struct entries_status status = {};
 		result = doca_flow_pipe_hash_add_entry(0, pipe,
 			i, &crypto_action, &monitor_with_count, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 		if (result != DOCA_SUCCESS) {
@@ -444,7 +454,7 @@ struct doca_flow_pipe *create_encrypt_pipe(
 			exit(-1);
 		}
 
-		if ((i % QUEUE_DEPTH) == (QUEUE_DEPTH - 1)) {
+		while (status.entries_in_queue >= QUEUE_DEPTH) {
 			result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, QUEUE_DEPTH);
 			if (result != DOCA_SUCCESS) {
 				DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
@@ -453,10 +463,12 @@ struct doca_flow_pipe *create_encrypt_pipe(
 		}
 	}
 
-	result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, app_cfg->num_spi % QUEUE_DEPTH);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
-		exit(-1);
+	while (status.entries_in_queue > 0) {
+		result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, status.entries_in_queue);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
+			exit(-1);
+		}
 	}
 	return pipe;
 }
@@ -465,8 +477,10 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	const struct random_spi_gw_config *app_cfg)
 {
 	const char *pipe_name = "DECRYPT_PIPE";
+	struct entries_status status = {};
 
 	struct doca_flow_match match = {
+		.outer.l3_type = DOCA_FLOW_L3_TYPE_IP6,
 		.tun = {
 			.type = DOCA_FLOW_TUN_ESP,
 			.esp_spi = UINT32_MAX,
@@ -489,6 +503,7 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	struct doca_flow_pipe_cfg cfg = {
 		.attr = {
 			.name = pipe_name,
+			.nb_flows = app_cfg->num_spi,
 			.nb_actions = 1,
 			.type = DOCA_FLOW_PIPE_BASIC,
 			.domain = DOCA_FLOW_PIPE_DOMAIN_SECURE_INGRESS,
@@ -512,8 +527,8 @@ struct doca_flow_pipe *create_decrypt_pipe(
 		match.tun.esp_spi = conn->spi;
 		crypto_action.security.crypto_id = conn->decrypt_ipsec_idx;
 		
+		++status.entries_in_queue;
 		struct doca_flow_pipe_entry *entry = NULL;
-		struct entries_status status = {};
 		result = doca_flow_pipe_add_entry(0, pipe,
 			&match, &crypto_action, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 		if (result != DOCA_SUCCESS) {
@@ -521,12 +536,22 @@ struct doca_flow_pipe *create_decrypt_pipe(
 				pipe_name, i, doca_get_error_string(result));
 			exit(-1);
 		}
+
+		while (status.entries_in_queue >= QUEUE_DEPTH) {
+			result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, QUEUE_DEPTH);
+			if (result != DOCA_SUCCESS) {
+				DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
+				exit(-1);
+			}
+		}
 	}
 
-	result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, app_cfg->num_spi);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
-		exit(-1);
+	while (status.entries_in_queue > 0) {
+		result = doca_flow_entries_process(app_cfg->pf.port, 0, TIMEOUT_USEC, status.entries_in_queue);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to process %s pipe entries: %s", pipe_name, doca_get_error_string(result));
+			exit(-1);
+		}
 	}
 	return pipe;
 }
@@ -535,6 +560,7 @@ struct doca_flow_pipe *create_syndrome_drop_pipe(
 	const struct random_spi_gw_config *app_cfg)
 {
 	const char *pipe_name = "BAD_SYNDROME_DROP_PIPE";
+	struct entries_status status = {};
 
 	struct doca_flow_match match = {
 	};
@@ -560,8 +586,8 @@ struct doca_flow_pipe *create_syndrome_drop_pipe(
 		exit(-1);
 	}
 
+	++status.entries_in_queue;
 	struct doca_flow_pipe_entry *entry = NULL;
-	struct entries_status status = {};
 	result = doca_flow_pipe_add_entry(0, pipe,
 		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 	if (result != DOCA_SUCCESS) {
@@ -582,6 +608,7 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 	uint32_t egress_port_id)
 {
 	const char *pipe_name = "DECRYPT_SYNDROME_PIPE";
+	struct entries_status status = {};
 
 	struct doca_flow_match match = {
 	};
@@ -619,8 +646,8 @@ struct doca_flow_pipe *create_decrypt_syndrome_pipe(
 		exit(-1);
 	}
 
+	++status.entries_in_queue;
 	struct doca_flow_pipe_entry *entry = NULL;
-	struct entries_status status = {};
 	result = doca_flow_pipe_add_entry(0, pipe,
 		&match, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status, &entry);
 	if (result != DOCA_SUCCESS) {
@@ -641,6 +668,7 @@ create_root_ctrl_pipe(
 	const struct random_spi_gw_config *app_cfg)
 {
 	const char *pipe_name = "ROOT_CTRL_PIPE";
+	struct entries_status status = {};
 
 	struct doca_flow_pipe_cfg pipe_cfg = {
 		.attr = {
@@ -658,20 +686,24 @@ create_root_ctrl_pipe(
 		exit(-1);
 	}
 
-	struct doca_flow_match match_mask_port_meta = {
-		.meta = {
-			.port_meta = UINT32_MAX,
-		},
+	struct doca_flow_match uplink_match_mask = {
+		.outer.l3_type = DOCA_FLOW_L3_TYPE_IP6,
+		.tun.type = DOCA_FLOW_TUN_ESP,
+		.meta.port_meta = UINT32_MAX,
 	};
 	struct doca_flow_match uplink_match = {
-		.meta = {
-			.port_meta = 0,
-		},
+		.outer.l3_type = DOCA_FLOW_L3_TYPE_IP6,
+		.tun.type = DOCA_FLOW_TUN_ESP,
+		.meta.port_meta = 0,
+	};
+
+	struct doca_flow_match vf_match_mask = {
+		.outer.l3_type = DOCA_FLOW_L3_TYPE_IP6,
+		.meta.port_meta = UINT32_MAX,
 	};
 	struct doca_flow_match vf_match = {
-		.meta = {
-			.port_meta = 1,
-		},
+		.outer.l3_type = DOCA_FLOW_L3_TYPE_IP6,
+		.meta.port_meta = 1,
 	};
 
 	// Forward from uplink to the decryption pipe
@@ -681,24 +713,39 @@ create_root_ctrl_pipe(
 	};
 	uint32_t uplink_rule_prio = 3;
 
+	++status.entries_in_queue;
 	struct doca_flow_pipe_entry *entry = NULL;
-	struct entries_status status = {};
 	result = doca_flow_pipe_control_add_entry(0, uplink_rule_prio, pipe,
-		&uplink_match, &match_mask_port_meta, NULL, NULL, NULL, NULL, &uplink_fwd, &status, &entry);
+		&uplink_match, &uplink_match_mask, NULL, NULL, NULL, NULL, &uplink_fwd, &status, &entry);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
 			pipe_name, doca_get_error_string(result));
 	}
 
-	// Forward from the VF to the encryption pipe
+	// Forward from the VF to the encryption pipe (general case)
 	struct doca_flow_fwd vf_fwd = {
 		.type = DOCA_FLOW_FWD_PIPE,
-		.next_pipe = app_cfg->encrypt_pipe,
+		.next_pipe = app_cfg->encrypt_pipe_general,
 	};
 	uint32_t vf_rule_prio = 2;
 
+	++status.entries_in_queue;
 	result = doca_flow_pipe_control_add_entry(0, vf_rule_prio, pipe,
-		&vf_match, &match_mask_port_meta, NULL, NULL, NULL, NULL, &vf_fwd, &status, &entry);
+		&vf_match, &vf_match_mask, NULL, NULL, NULL, NULL, &vf_fwd, &status, &entry);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
+			pipe_name, doca_get_error_string(result));
+	}
+
+	// Forward from the VF to the encryption pipe (UDP case)
+	vf_match_mask.outer.l4_type_ext = DOCA_FLOW_L4_TYPE_EXT_UDP;
+	vf_match.outer.l4_type_ext = DOCA_FLOW_L4_TYPE_EXT_UDP;
+	vf_fwd.next_pipe = app_cfg->encrypt_pipe_udp;
+	vf_rule_prio = 1;
+
+	++status.entries_in_queue;
+	result = doca_flow_pipe_control_add_entry(0, vf_rule_prio, pipe,
+		&vf_match, &vf_match_mask, NULL, NULL, NULL, NULL, &vf_fwd, &status, &entry);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe entry: %s", 
 			pipe_name, doca_get_error_string(result));
@@ -740,7 +787,8 @@ static doca_error_t random_spi_gw_init_flows(
 	random_spi_gw_init_crypto_objs(app_cfg);
 
 	DOCA_LOG_INFO("Creating Encrypt Pipe");
-	app_cfg->encrypt_pipe = create_encrypt_pipe(app_cfg);
+	app_cfg->encrypt_pipe_general = create_encrypt_pipe(app_cfg, false);
+	app_cfg->encrypt_pipe_udp     = create_encrypt_pipe(app_cfg, true);
 
 	DOCA_LOG_INFO("Creating Decrypt Pipe");
 	app_cfg->decrypt_pipe = create_decrypt_pipe(app_cfg);

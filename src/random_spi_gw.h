@@ -65,7 +65,8 @@ struct random_spi_gw_config {
 	struct doca_ctx *doca_ctx;			/* DOCA IPSEC as context */
 
 	struct doca_flow_pipe *uplink_root_pipe;
-	struct doca_flow_pipe *encrypt_pipe;
+	struct doca_flow_pipe *encrypt_pipe_general;
+	struct doca_flow_pipe *encrypt_pipe_udp;
 	struct doca_flow_pipe *decrypt_pipe;
 	struct doca_flow_pipe *syndrome_check_pipe;
 	struct doca_flow_pipe *bad_syndrome_drop_pipe;

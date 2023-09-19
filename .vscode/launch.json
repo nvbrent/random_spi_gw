@@ -10,8 +10,7 @@
             "request": "launch",
             "type": "cppdbg",
             "args": [
-                "-d", "b8:3f:d2:ba:65:ee"
-                //"-sn", "enp23s0f0np0", "-un", "enp23s0f1np1", "-m", "tunnel", "-c", "ipsec_gw_rules_8192.json"
+                "-d", "b8:3f:d2:ba:65:ee", "-i", "22:d6:04:82:05:ac", "-n", "256"
             ],
             "cwd": "${workspaceFolder}"
         }
