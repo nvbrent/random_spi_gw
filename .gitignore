@@ -1,2 +1,5 @@
 **/build/
 **/bin/
+
+doca_2_5/
+mlnx_dpdk/

@@ -60,9 +60,17 @@ struct random_spi_gw_config {
 
 	uint32_t salt;
 
+	struct doca_pe *doca_pe; // TODO: DOCA 2.5
 	struct doca_ipsec *ipsec_ctx;			/* DOCA IPSEC context */
 	struct doca_workq *doca_workq;			/* DOCA IPSEC workq */
 	struct doca_ctx *doca_ctx;			/* DOCA IPSEC as context */
+
+	// IDs used to create dummy crypto objects, and the resulting total objects
+	// Dummy encrypt-decrypt objects created at the pipe level.
+	// Actual crypto objects will be created for each pipe entry.
+	uint32_t doca_crypto_id_dummy_encrypt;
+	uint32_t doca_crypto_id_dummy_decrypt;
+	uint32_t doca_crypto_id_total;
 
 	struct doca_flow_pipe *uplink_root_pipe;
 	struct doca_flow_pipe *encrypt_pipe_general;

@@ -41,7 +41,6 @@ app_srcs = [
 	'src/random_spi_gw_program_args.c',
 	# DOCA-provided utilities:
 	common_dir_path + '/dpdk_utils.c',
-	common_dir_path + '/offload_rules.c',
 	common_dir_path + '/utils.c',
     doca_home + '/samples/common.c',
 ]
