@@ -250,9 +250,10 @@ create_security_assoc(
 		DOCA_LOG_ERR("Failed to retrieve task: %s", doca_error_get_descr(result));
 
 	/* if task succeed event.result.ptr will point to the new created sa object */
-	struct doca_ipsec_sa *sa = doca_ipsec_task_sa_create_get_sa(task);
+	const struct doca_ipsec_sa *sa = doca_ipsec_task_sa_create_get_sa(task);
 	doca_task_free(doca_ipsec_task_sa_create_as_task(task));
-	return sa;
+	// The input to doca_flow_shared_resource_cfg() is non-const, so discard constness here
+	return (struct doca_ipsec_sa *)sa;
 }
 
 doca_error_t
@@ -260,42 +261,37 @@ destroy_ipsec_sa(
 	struct random_spi_gw_config *app_cfg, 
 	struct doca_ipsec_sa *sa)
 {
-#if 0 // TODO: DOCA 2.5
-	struct doca_event event = {0};
 	struct timespec ts = {
 		.tv_sec = 0,
 		.tv_nsec = SLEEP_IN_NANOS,
 	};
+	struct doca_pe *pe = app_cfg->doca_pe;
+	struct doca_ipsec *doca_ipsec_ctx = app_cfg->ipsec_ctx;
+	struct doca_ipsec_task_sa_destroy *task;
+	union doca_data user_data = {};
 	doca_error_t result;
 
-	const struct doca_ipsec_sa_destroy_job sa_destroy = {
-		.base = (struct doca_job) {
-			.type = DOCA_IPSEC_JOB_SA_DESTROY,
-			.flags = DOCA_JOB_FLAGS_NONE,
-			.ctx = app_cfg->doca_ctx,
-		},
-		.sa = sa,
-	};
-
-	/* Enqueue IPsec job */
-	result = doca_workq_submit(app_cfg->doca_workq, &sa_destroy.base);
+	result = doca_ipsec_task_sa_destroy_allocate_init(doca_ipsec_ctx, sa, user_data, &task);
 	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to submit ipsec job: %s", doca_error_get_descr(result));
+		DOCA_LOG_ERR("Failed to init ipsec task: %s", doca_error_get_descr(result));
 		return result;
 	}
 
-	/* Wait for job completion */
-	while ((result = doca_workq_progress_retrieve(app_cfg->doca_workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
-	       DOCA_ERROR_AGAIN) {
-		nanosleep(&ts, &ts);
+	/* Enqueue IPsec task */
+	result = doca_task_submit(doca_ipsec_task_sa_destroy_as_task(task));
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to submit ipsec task: %s", doca_error_get_descr(result));
+		return result;
 	}
 
-	if (result != DOCA_SUCCESS)
-		DOCA_LOG_ERR("Failed to retrieve job: %s", doca_error_get_descr(result));
+	/* Wait for task completion */
+	while (!doca_pe_progress(pe))
+		nanosleep(&ts, &ts);
 
+	if (doca_task_get_status(doca_ipsec_task_sa_destroy_as_task(task)) != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to retrieve task: %s", doca_error_get_descr(result));
+	doca_task_free(doca_ipsec_task_sa_destroy_as_task(task));
 	return result;
-#endif
-	return DOCA_SUCCESS;
 }
 
 
@@ -419,7 +415,7 @@ struct doca_flow_pipe *create_encrypt_pipe(
 	};
 
 	struct doca_flow_pipe *pipe = NULL;
-	doca_error_t result = doca_flow_pipe_create(&cfg, NULL, &miss, &pipe);
+	doca_error_t result = doca_flow_pipe_create(&cfg, &fwd, &miss, &pipe);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_error_get_descr(result));
 		exit(-1);
@@ -511,7 +507,7 @@ struct doca_flow_pipe *create_decrypt_pipe(
 	};
 
 	struct doca_flow_pipe *pipe = NULL;
-	doca_error_t result = doca_flow_pipe_create(&cfg, NULL, &miss, &pipe);
+	doca_error_t result = doca_flow_pipe_create(&cfg, &fwd, &miss, &pipe);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create %s pipe: %s", pipe_name, doca_error_get_descr(result));
 		exit(-1);
@@ -865,8 +861,15 @@ main(int argc, char **argv)
 	char cores_str[10];
 	char *eal_param[5] = {"", "-a", "00:00.0", "-l", ""};
 
+	struct doca_log_backend *stdout_logger = NULL;
+	result = doca_log_backend_create_with_file_sdk(stdout, &stdout_logger);
+	if (result != DOCA_SUCCESS)
+		return EXIT_FAILURE;
+
+	doca_log_backend_set_sdk_level(stdout_logger, DOCA_LOG_LEVEL_DEBUG);
+
 	/* Register a logger backend */
-	result = doca_log_create_standard_backend();
+	result = doca_log_backend_create_standard();
 	if (result != DOCA_SUCCESS)
 		return EXIT_FAILURE;
 

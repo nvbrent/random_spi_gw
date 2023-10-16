@@ -55,7 +55,7 @@ random_spi_gw_register_argp_params(void)
 
 	ret = doca_argp_param_create(&param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_error_get_descr(ret));
         return ret;
     }
 	doca_argp_param_set_short_name(param, "d");
@@ -66,13 +66,13 @@ random_spi_gw_register_argp_params(void)
 	doca_argp_param_set_type(param, DOCA_ARGP_TYPE_STRING);
 	ret = doca_argp_register_param(param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_error_get_descr(ret));
         return ret;
     }
 	
 	ret = doca_argp_param_create(&param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_error_get_descr(ret));
         return ret;
     }
 	doca_argp_param_set_short_name(param, "i");
@@ -83,13 +83,13 @@ random_spi_gw_register_argp_params(void)
 	doca_argp_param_set_type(param, DOCA_ARGP_TYPE_STRING);
 	ret = doca_argp_register_param(param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_error_get_descr(ret));
         return ret;
     }
 	
 	ret = doca_argp_param_create(&param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_error_get_descr(ret));
         return ret;
     }
     doca_argp_param_set_short_name(param, "n");
@@ -99,7 +99,7 @@ random_spi_gw_register_argp_params(void)
 	doca_argp_param_set_type(param, DOCA_ARGP_TYPE_INT);
 	ret = doca_argp_register_param(param);
 	if (ret != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(ret));
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_error_get_descr(ret));
         return ret;
     }
 	

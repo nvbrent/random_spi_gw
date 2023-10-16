@@ -60,7 +60,7 @@ struct random_spi_gw_config {
 
 	uint32_t salt;
 
-	struct doca_pe *doca_pe; // TODO: DOCA 2.5
+	struct doca_pe *doca_pe;
 	struct doca_ipsec *ipsec_ctx;			/* DOCA IPSEC context */
 	struct doca_workq *doca_workq;			/* DOCA IPSEC workq */
 	struct doca_ctx *doca_ctx;			/* DOCA IPSEC as context */
